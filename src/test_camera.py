@@ -1,26 +1,35 @@
+"""Quick camera feed test script."""
+
+import sys
 import cv2
 
-# Open default webcam (0) — for DroidCam or Iriun, this should work.
-# If it doesn’t, try 1 or 2 instead of 0.
-cap = cv2.VideoCapture(1)
+camera_index = 0
+if len(sys.argv) > 1:
+    try:
+        camera_index = int(sys.argv[1])
+    except ValueError:
+        pass
+
+print(f"Opening camera index {camera_index}...")
+cap = cv2.VideoCapture(camera_index)
 
 if not cap.isOpened():
-    print("❌ Could not open camera. Try changing index to 1 or 2.")
-    exit()
+    print(f"Could not open camera {camera_index}. Run 'python src/list_cameras.py' to check available devices.")
+    sys.exit(1)
 
-print("✅ Camera opened successfully. Press 'q' to quit.")
+print(f"Camera {camera_index} opened. Press 'q' in the window to quit.")
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("❌ Failed to grab frame.")
-        break
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab frame.")
+            break
 
-    cv2.imshow("Camera Feed", frame)
-
-    # Press 'q' to exit the window
-    if cv2.waitKey(0) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
+        cv2.imshow("Camera Feed Test", frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
+    print("Camera released.")
