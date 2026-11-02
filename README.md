@@ -8,6 +8,17 @@ An asynchronous, modular, and resilient computer vision assistance pipeline comb
 
 ---
 
+## Project Overview
+
+This project provides an intelligent, accessible visual assistant that bridges the gap between raw camera streams and actionable auditory feedback:
+
+- **YOLOv8 Object Detection**: Employs Ultralytics YOLOv8 nano (`yolov8n.pt`) to detect, bound, and categorize everyday objects in real time with high accuracy and minimal latency.
+- **Salesforce BLIP Image Captioning**: Utilizes Salesforce's `blip-image-captioning-base` vision-language model to generate rich, descriptive natural language captions of complex scenes.
+- **OpenCV Video Stream Integration**: Captures webcam input with automatic device discovery, handles reconnection on frame drops, and overlays a responsive HUD with live performance telemetry.
+- **pyttsx3 Auditory Feedback (TTS)**: Translates detected objects and scene captions into spoken announcements via a dedicated background thread, ensuring smooth audio without blocking video playback.
+
+---
+
 ## Architecture Overview
 
 ```mermaid
