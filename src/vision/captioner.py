@@ -104,11 +104,17 @@ class ImageCaptioner:
             f"(precision={'FP16' if use_fp16 else 'FP32'})..."
         )
         try:
-            self.processor = BlipProcessor.from_pretrained(self.model_name)
-            self.model = BlipForConditionalGeneration.from_pretrained(
-                self.model_name,
-                torch_dtype=torch_dtype,
-            )
+            self.processor = BlipProcessor.from_pretrained(self.model_name, use_fast=False)
+            try:
+                self.model = BlipForConditionalGeneration.from_pretrained(
+                    self.model_name,
+                    dtype=torch_dtype,
+                )
+            except TypeError:
+                self.model = BlipForConditionalGeneration.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch_dtype,
+                )
             self.model.eval()
             self.model.to(self.device)
 
