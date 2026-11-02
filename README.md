@@ -214,5 +214,24 @@ OK (All passed)
 
 ---
 
+## Limitations and Future Work
+
+### Verified Technical Limitations
+
+- **Caption Generation Latency**: Running the Salesforce BLIP vision-language model incurs noticeable latency on CPU hardware (~800-860 ms per novel scene inference pass). While the asynchronous worker prevents display freezes, novel scene descriptions reflect a sub-second delay compared to real-time YOLO detections.
+- **Hardware & Compute Divergence (CPU vs. GPU)**: High-throughput mixed-precision (FP16) inference requires a CUDA-compatible NVIDIA GPU with Tensor Cores (~5-8 ms for YOLO, ~60-95 ms for BLIP). On CPU-only environments, overall processing operates at a lower throughput (~14 FPS for YOLO, ~1.1 FPS for BLIP).
+- **Webcam & Hardware Ingestion Dependencies**: The system relies on local OpenCV-compatible video capture devices. Virtual or external cameras (e.g. DroidCam, Iriun) require correct device indexing and driver permissions. Read errors trigger automated reconnect loops, but prolonged camera disconnects pause pipeline ingestion.
+- **Scene-Level Captioning Abstraction**: BLIP produces global scene descriptions rather than fine-grained metric spatial relations. While YOLO detects bounding boxes, global captioning can occasionally omit small or obscured background elements in complex visual environments.
+- **Audio Serialization Constraints**: Speech announcements are processed through a single text-to-speech audio channel. Although bounded FIFO queues discard outdated alerts, simultaneous rapid alerts must be queued sequentially.
+
+### Future Work & Roadmap
+
+- **Model Quantization & Acceleration**: Implement ONNX Runtime and NVIDIA TensorRT compilation with INT8 quantization to accelerate CPU and edge device throughput.
+- **Spatial Audio & Directional Guidance**: Map detected bounding box center coordinates (x, y) to stereo audio panning (left/right channels) to give users intuitive directional feedback.
+- **Depth Estimation**: Integrate lightweight monocular depth models (e.g. MiDaS) to estimate distance and provide immediate obstacle proximity alerts.
+- **Multi-Modal Visual Question Answering (VQA)**: Extend captioning with interactive voice queries allowing users to ask specific questions about the visual scene.
+
+---
+
 ## License
 MIT
