@@ -1,4 +1,4 @@
-"""Real-time video processing pipeline orchestrator."""
+"""Real-time video processing pipeline orchestrator optimized for GPU and CPU."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import torch
 
 from src.audio.speech_engine import SpeechEngine
 from src.config import AppConfig
@@ -40,12 +41,14 @@ class VideoProcessor:
             iou_threshold=config.vision.iou_threshold,
             img_size=config.vision.img_size,
             device=config.vision.device,
+            use_half=config.vision.use_half,
             enable_tracking=config.vision.enable_tracking,
         )
 
         self.captioner_core = ImageCaptioner(
             model_name=config.caption.model_name,
             device=config.caption.device,
+            use_half=config.caption.use_half,
             max_new_tokens=config.caption.max_new_tokens,
         )
 
@@ -97,7 +100,7 @@ class VideoProcessor:
         detection_summary: str,
         is_captioning: bool,
     ) -> np.ndarray:
-        """Render a clean, responsive assistive HUD onto the video frame."""
+        """Render a clean, responsive assistive HUD onto the video frame with GPU telemetry."""
         h, w = frame.shape[:2]
         canvas = frame.copy()
 
@@ -107,11 +110,19 @@ class VideoProcessor:
         # Performance Metrics: FPS & Latencies
         fps_text = f"FPS: {fps:.1f}"
         lat_text = f"Det: {det_latency:.0f}ms | BLIP: {cap_latency:.0f}ms | E2E: {e2e_latency:.0f}ms"
-        device_text = f"[{self.detector.device.upper()}]"
+
+        # Device and VRAM Telemetry
+        is_cuda = self.detector.device == "cuda" and torch.cuda.is_available()
+        if is_cuda:
+            alloc_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+            dev_name = torch.cuda.get_device_name(0).replace("NVIDIA GeForce ", "")
+            device_text = f"[{dev_name} FP16: {alloc_mb:.0f}MB]"
+        else:
+            device_text = "[CPU]"
 
         cv2.putText(canvas, fps_text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
         cv2.putText(canvas, lat_text, (130, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-        cv2.putText(canvas, device_text, (w - 90, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2)
+        cv2.putText(canvas, device_text, (max(w - 260, 360), 28), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 220, 255), 1)
 
         # Bottom banner for Caption and Detected objects
         banner_h = 70
@@ -180,7 +191,7 @@ class VideoProcessor:
             # Submit frame to background caption worker (throttled by interval & scene change)
             self.caption_worker.submit_frame(frame)
 
-            # Synchronous YOLO detection (fast, keeps display responsive)
+            # Synchronous YOLO detection (GPU/Tensor Cores accelerated)
             det_result = self.detector.detect(frame)
             self._last_detection_summary = det_result.summary
 
@@ -218,7 +229,7 @@ class VideoProcessor:
                 logger.info(f"Tracking toggled: {self.detector.enable_tracking}")
 
     def stop(self) -> None:
-        """Cleanly terminate all pipeline workers and resources."""
+        """Cleanly terminate all pipeline workers, resources, and free GPU caches."""
         self._is_running = False
         logger.info("Shutting down visual assistance pipeline...")
 
@@ -241,5 +252,12 @@ class VideoProcessor:
             cv2.destroyAllWindows()
         except Exception as e:
             logger.error(f"Error destroying OpenCV windows: {e}")
+
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                logger.info("GPU VRAM cache cleared.")
+            except Exception:
+                pass
 
         logger.info("All pipeline resources released cleanly.")

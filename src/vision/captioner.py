@@ -1,4 +1,4 @@
-"""Asynchronous BLIP image captioning with scene-change detection and deduplication."""
+"""Asynchronous BLIP image captioning optimized for GPU, FP16, and scene-change filtering."""
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ def calculate_scene_change(prev_frame: np.ndarray, curr_frame: np.ndarray) -> fl
         return 1.0
 
     try:
-        # Resize to small dimension for fast computation
         h, w = 64, 64
         gray1 = cv2.cvtColor(cv2.resize(prev_frame, (w, h)), cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(cv2.resize(curr_frame, (w, h)), cv2.COLOR_BGR2GRAY)
@@ -58,21 +57,35 @@ def calculate_text_similarity(text1: str, text2: str) -> float:
 
 
 class ImageCaptioner:
-    """Synchronous core BLIP caption generator."""
+    """Synchronous core BLIP caption generator with GPU FP16 and Tensor Core optimization."""
 
     def __init__(
         self,
         model_name: str = "Salesforce/blip-image-captioning-base",
         device: str = "auto",
+        use_half: bool = True,
         max_new_tokens: int = 30,
     ) -> None:
         self.model_name = model_name
         self.max_new_tokens = max_new_tokens
+        self.use_half = use_half
         self.device = self._resolve_device(device)
 
+        self._configure_gpu_backends()
         self.processor: Optional[BlipProcessor] = None
         self.model: Optional[BlipForConditionalGeneration] = None
         self._load_model()
+
+    def _configure_gpu_backends(self) -> None:
+        """Enable CUDA kernel autotuning and TF32 matrix multiplication."""
+        if self.device == "cuda" and torch.cuda.is_available():
+            try:
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                logger.debug("CUDA Tensor Core and CuDNN benchmark optimizations enabled for BLIP.")
+            except Exception as e:
+                logger.debug(f"Could not set CUDA backend flags for BLIP: {e}")
 
     def _resolve_device(self, requested: str) -> str:
         if requested == "auto":
@@ -83,16 +96,41 @@ class ImageCaptioner:
         return requested
 
     def _load_model(self) -> None:
-        logger.info(f"Loading BLIP captioning model '{self.model_name}' on {self.device}...")
+        use_fp16 = self.use_half and (self.device == "cuda")
+        torch_dtype = torch.float16 if use_fp16 else torch.float32
+
+        logger.info(
+            f"Loading BLIP captioning model '{self.model_name}' on {self.device} "
+            f"(precision={'FP16' if use_fp16 else 'FP32'})..."
+        )
         try:
             self.processor = BlipProcessor.from_pretrained(self.model_name)
-            self.model = BlipForConditionalGeneration.from_pretrained(self.model_name)
+            self.model = BlipForConditionalGeneration.from_pretrained(
+                self.model_name,
+                torch_dtype=torch_dtype,
+            )
             self.model.eval()
             self.model.to(self.device)
+
+            # Warmup GPU to eliminate initial generation spike
+            if self.device == "cuda" and torch.cuda.is_available():
+                self._warmup_gpu()
+
             logger.info(f"BLIP model loaded successfully on {self.device}.")
         except Exception as e:
             logger.error(f"Failed to load BLIP model: {e}")
             raise RuntimeError(f"Could not load BLIP captioner: {e}")
+
+    def _warmup_gpu(self) -> None:
+        """Run dummy inference on GPU to pre-allocate caches and compile kernels."""
+        try:
+            dummy_img = Image.new("RGB", (64, 64), color="gray")
+            with torch.inference_mode():
+                inputs = self.processor(dummy_img, return_tensors="pt").to(self.device)
+                self.model.generate(**inputs, max_new_tokens=5)
+            logger.debug("BLIP GPU warmup completed.")
+        except Exception as w_err:
+            logger.debug(f"BLIP GPU warmup skipped: {w_err}")
 
     def generate(self, frame: np.ndarray) -> Tuple[str, float]:
         """Generate caption from an OpenCV BGR frame.
@@ -104,14 +142,20 @@ class ImageCaptioner:
             return "Captioner unavailable", 0.0
 
         start_time = time.perf_counter()
+        use_fp16 = self.use_half and (self.device == "cuda")
+
         try:
-            # Convert BGR OpenCV image to PIL RGB
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb)
 
             with torch.inference_mode():
                 inputs = self.processor(pil_image, return_tensors="pt").to(self.device)
-                outputs = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+                if use_fp16:
+                    with torch.amp.autocast("cuda", dtype=torch.float16):
+                        outputs = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+                else:
+                    outputs = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+
                 caption = self.processor.decode(outputs[0], skip_special_tokens=True).strip()
 
             latency_ms = (time.perf_counter() - start_time) * 1000.0
@@ -150,7 +194,6 @@ class AsyncCaptionWorker:
         self.similarity_threshold = similarity_threshold
         self.on_new_caption = on_new_caption
 
-        # Single-element bounded queue to avoid stale frame accumulation
         self._input_queue: queue.Queue = queue.Queue(maxsize=1)
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
@@ -196,7 +239,6 @@ class AsyncCaptionWorker:
                     self._last_caption_time = now
                     self._last_captioned_frame = frame.copy()
 
-                    # Check text similarity for deduplication
                     sim = calculate_text_similarity(self._latest_caption, caption)
                     is_novel = sim < self.similarity_threshold or is_forced or not self._latest_caption
 
@@ -228,18 +270,15 @@ class AsyncCaptionWorker:
             if self._is_busy:
                 return False
 
-            # Check time interval
             if not force and (now - self._last_caption_time) < self.interval_seconds:
                 return False
 
-            # Check scene change
             if not force and self._last_captioned_frame is not None:
                 scene_diff = calculate_scene_change(self._last_captioned_frame, frame)
                 if scene_diff < self.scene_change_threshold:
                     logger.debug(f"Scene change too low ({scene_diff:.2f} < {self.scene_change_threshold}); skipping caption.")
                     return False
 
-        # Attempt to put in single-element queue, discard stale if needed
         try:
             self._input_queue.put_nowait((frame.copy(), force))
             return True

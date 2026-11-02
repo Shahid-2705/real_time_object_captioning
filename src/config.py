@@ -46,6 +46,7 @@ class VisionConfig:
     iou_threshold: float = 0.45
     img_size: int = 640
     device: str = "auto"  # 'auto', 'cuda', 'cpu'
+    use_half: bool = True  # FP16 half-precision for GPU acceleration
     enable_tracking: bool = False
     tracker_type: str = "bytetrack"
 
@@ -69,6 +70,7 @@ class CaptionConfig:
     similarity_threshold: float = 0.70    # String similarity ratio for deduplication
     max_new_tokens: int = 30
     device: str = "auto"                  # 'auto', 'cuda', 'cpu'
+    use_half: bool = True                 # FP16 half-precision for GPU acceleration
 
     def validate(self) -> None:
         if self.interval_seconds <= 0:
@@ -212,6 +214,8 @@ class AppConfig:
         parser.add_argument("--caption-interval", type=float, default=None, help="Interval between caption runs (seconds)")
         parser.add_argument("--min-speech-interval", type=float, default=None, help="Cooldown between speech announcements (seconds)")
         parser.add_argument("--device", type=str, choices=["auto", "cuda", "cpu"], default=None, help="Compute device for inference")
+        parser.add_argument("--half", dest="use_half", action="store_true", default=None, help="Enable FP16 half-precision for GPU acceleration")
+        parser.add_argument("--no-half", dest="use_half", action="store_false", default=None, help="Disable FP16 half-precision (use FP32)")
         parser.add_argument("--enable-tracking", action="store_true", default=None, help="Enable object tracking across frames")
         parser.add_argument("--no-speech", action="store_true", help="Disable text-to-speech output")
         parser.add_argument("--speech-rate", type=int, default=None, help="Text-to-speech words per minute")
@@ -250,6 +254,9 @@ class AppConfig:
         if parsed.device:
             config.vision.device = parsed.device
             config.caption.device = parsed.device
+        if parsed.use_half is not None:
+            config.vision.use_half = parsed.use_half
+            config.caption.use_half = parsed.use_half
         if parsed.enable_tracking is not None:
             config.vision.enable_tracking = parsed.enable_tracking
         if parsed.no_speech:

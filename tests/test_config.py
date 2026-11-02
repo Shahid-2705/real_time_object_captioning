@@ -18,6 +18,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.camera.index, 0)
         self.assertGreater(config.caption.interval_seconds, 0)
         self.assertTrue(config.audio.enable_speech)
+        self.assertTrue(config.vision.use_half)
+        self.assertTrue(config.caption.use_half)
 
     def test_path_resolution(self):
         """Verify relative paths resolve properly against project root."""
@@ -59,6 +61,7 @@ class TestConfig(unittest.TestCase):
         config.camera.index = 2
         config.audio.rate = 180
         config.vision.confidence_threshold = 0.5
+        config.vision.use_half = True
 
         with tempfile.NamedTemporaryFile("w+", suffix=".json", delete=False) as tmp:
             tmp_path = Path(tmp.name)
@@ -69,6 +72,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(loaded.camera.index, 2)
             self.assertEqual(loaded.audio.rate, 180)
             self.assertAlmostEqual(loaded.vision.confidence_threshold, 0.5)
+            self.assertTrue(loaded.vision.use_half)
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
@@ -81,6 +85,7 @@ class TestConfig(unittest.TestCase):
             "--no-speech",
             "--speech-rate", "140",
             "--device", "cpu",
+            "--no-half",
         ]
         config = AppConfig.from_cli_args(args)
         self.assertEqual(config.camera.index, 1)
@@ -88,6 +93,8 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(config.audio.enable_speech)
         self.assertEqual(config.audio.rate, 140)
         self.assertEqual(config.vision.device, "cpu")
+        self.assertFalse(config.vision.use_half)
+        self.assertFalse(config.caption.use_half)
 
 
 if __name__ == "__main__":

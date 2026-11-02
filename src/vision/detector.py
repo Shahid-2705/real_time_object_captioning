@@ -1,4 +1,4 @@
-"""YOLOv8 real-time object detection module."""
+"""YOLOv8 real-time object detection module optimized for GPU and Tensor Cores."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class DetectionResult:
 
 
 class ObjectDetector:
-    """Wraps Ultralytics YOLOv8 with robust resource and device management."""
+    """Wraps Ultralytics YOLOv8 with GPU acceleration, FP16 half-precision, and device management."""
 
     def __init__(
         self,
@@ -46,17 +46,31 @@ class ObjectDetector:
         iou_threshold: float = 0.45,
         img_size: int = 640,
         device: str = "auto",
+        use_half: bool = True,
         enable_tracking: bool = False,
     ) -> None:
         self.model_path = Path(model_path).resolve()
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.img_size = img_size
+        self.use_half = use_half
         self.enable_tracking = enable_tracking
         self.device = self._resolve_device(device)
 
+        self._configure_gpu_backends()
         self.model: Optional[YOLO] = None
         self._load_model()
+
+    def _configure_gpu_backends(self) -> None:
+        """Enable high-throughput CuDNN and Tensor Core optimizations when on CUDA."""
+        if self.device == "cuda" and torch.cuda.is_available():
+            try:
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                logger.debug("CUDA Tensor Core and CuDNN benchmark optimizations enabled for YOLO.")
+            except Exception as e:
+                logger.debug(f"Could not set CUDA backend flags: {e}")
 
     def _resolve_device(self, requested: str) -> str:
         """Resolve target device with fallback."""
@@ -68,9 +82,8 @@ class ObjectDetector:
         return requested
 
     def _load_model(self) -> None:
-        """Load YOLO model weights with clear diagnostics."""
+        """Load YOLO model weights with clear diagnostics and GPU warmup."""
         if not self.model_path.is_file():
-            # If default yolov8n.pt doesn't exist locally, YOLO can download or search
             logger.warning(
                 f"YOLO weights not found at {self.model_path}. "
                 "Attempting to download/load standard YOLOv8 nano model..."
@@ -80,14 +93,37 @@ class ObjectDetector:
             model_target = str(self.model_path)
 
         try:
-            logger.info(f"Loading YOLO model from {model_target} on {self.device}...")
+            logger.info(f"Loading YOLO model from {model_target} on {self.device} (FP16={self.use_half and self.device == 'cuda'})...")
             self.model = YOLO(model_target)
             if hasattr(self.model, "to"):
                 self.model.to(self.device)
+
+            # Perform GPU warmup pass to pre-compile CUDA kernels and eliminate first-frame latency
+            if self.device == "cuda" and torch.cuda.is_available():
+                self._warmup_gpu()
+
             logger.info(f"YOLO model loaded successfully on {self.device}.")
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
             raise RuntimeError(f"Could not initialize YOLO detector: {e}")
+
+    def _warmup_gpu(self) -> None:
+        """Run a lightweight dummy inference to prime CUDA kernels."""
+        try:
+            dummy = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
+            use_fp16 = self.use_half and (self.device == "cuda")
+            with torch.inference_mode():
+                self.model.predict(
+                    dummy,
+                    conf=self.confidence_threshold,
+                    imgsz=self.img_size,
+                    device=self.device,
+                    half=use_fp16,
+                    verbose=False,
+                )
+            logger.debug("YOLO GPU warmup completed.")
+        except Exception as w_err:
+            logger.debug(f"YOLO GPU warmup skipped: {w_err}")
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         """Run object detection on an input frame."""
@@ -96,6 +132,7 @@ class ObjectDetector:
 
         start_time = time.perf_counter()
         detections: List[Detection] = []
+        use_fp16 = self.use_half and (self.device == "cuda")
 
         try:
             with torch.inference_mode():
@@ -106,6 +143,7 @@ class ObjectDetector:
                         iou=self.iou_threshold,
                         imgsz=self.img_size,
                         device=self.device,
+                        half=use_fp16,
                         persist=True,
                         verbose=False,
                     )
@@ -116,6 +154,7 @@ class ObjectDetector:
                         iou=self.iou_threshold,
                         imgsz=self.img_size,
                         device=self.device,
+                        half=use_fp16,
                         verbose=False,
                     )
 
@@ -189,7 +228,6 @@ class ObjectDetector:
             if count == 1:
                 items.append(f"1 {name}")
             else:
-                # Pluralize simple names
                 plural = name + "s" if not name.endswith("s") else name
                 items.append(f"{count} {plural}")
 
